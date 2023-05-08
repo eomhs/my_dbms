@@ -27,8 +27,8 @@ class MyTransformer(Transformer):
             print(f"{prompt_msg}Create table has failed: table with the same name already exists") # TableExistenceError
             return
         
-        myDB = db.DB()
-        myDB.open(table_schema_path, dbtype=db.DB_HASH, flags=db.DB_CREATE)
+        metaDB = db.DB()
+        metaDB.open(table_schema_path, dbtype=db.DB_HASH, flags=db.DB_CREATE)
 
         # Iterate column definitions to find column name, column type and whether column has not null constraint
         # Then put column name as key and column type as value into db
@@ -46,7 +46,7 @@ class MyTransformer(Transformer):
                     return
                 column_type += char_len
             try:
-                myDB.put(column_name.encode(), column_type.encode(), flags=db.DB_NOOVERWRITE)
+                metaDB.put(column_name.encode(), column_type.encode(), flags=db.DB_NOOVERWRITE)
             except:
                 print(f"{prompt_msg}Create table has failed: column definition is duplicated") # DuplicateColumnDefError
                 os.remove(table_schema_path)
@@ -59,10 +59,10 @@ class MyTransformer(Transformer):
                 not_null.append(column_name)
 
         # Put 'column_names' as key and column names separated by 'COLUMN' as value into db
-        myDB.put('column_names'.encode(), 'COLUMN'.join(column_names).encode())
+        metaDB.put('column_names'.encode(), 'COLUMN'.join(column_names).encode())
         
         # Put 'not_null' as key and not null column names separated by 'COLUMN' as value into db
-        myDB.put('not_null'.encode(), 'COLUMN'.join(not_null).encode())
+        metaDB.put('not_null'.encode(), 'COLUMN'.join(not_null).encode())
 
         # Iterate primary key constraints to find primary key column names
         primary_key_constraint_iter = items[3].find_data("primary_key_constraint")
@@ -76,7 +76,7 @@ class MyTransformer(Transformer):
             primary_column_iter = primary_key_constraint.find_data("column_name")
             for primary_column in primary_column_iter:
                 primary_column_name = primary_column.children[0].lower()
-                if not myDB.exists(primary_column_name.encode()):
+                if not metaDB.exists(primary_column_name.encode()):
                     print(f"{prompt_msg}Create table has failed: {primary_column_name} does not exist in column definition") # NonExistingColumnDefError
                     os.remove(table_schema_path)
                     return
@@ -84,10 +84,10 @@ class MyTransformer(Transformer):
             is_duplicate_primary_key = True
         
         # Put 'primary_key' as key and primary key column names separated by 'COLUMN' as value into db
-        myDB.put('primary_key'.encode(), 'COLUMN'.join(primary_key).encode())
+        metaDB.put('primary_key'.encode(), 'COLUMN'.join(primary_key).encode())
 
         # Put 'reference_count' as key and 0 as value
-        myDB.put('reference_count'.encode(), '0'.encode())
+        metaDB.put('reference_count'.encode(), '0'.encode())
         
         # Iterate foreign key constraints to find foreign key column names and their references
         referential_constraint_iter = items[3].find_data("referential_constraint")
@@ -98,7 +98,7 @@ class MyTransformer(Transformer):
             referencing_column_iter = referential_constraint.children[2].find_data("column_name")
             for referencing_column in referencing_column_iter:
                 referencing_column_name = referencing_column.children[0].lower()
-                if not myDB.exists(referencing_column_name.encode()):
+                if not metaDB.exists(referencing_column_name.encode()):
                     print(f"{prompt_msg}Create table has failed: {referencing_column_name} does not exist in column definition") # NonExistingColumnDefError
                     os.remove(table_schema_path)
                     return
@@ -126,7 +126,6 @@ class MyTransformer(Transformer):
                 return
 
             # Iterate foreign key and referenced key to compare correctness
-            referenced_table_primary_key_list = referenced_table_primary_key.decode().split('COLUMN')
             for referencing_column_name, referenced_column_name in zip(foreign_key, referenced_key):
                 if not referencedDB.exists(referenced_column_name.encode()):
                     print(f"{prompt_msg}Create table has failed: foreign key references non existing column") # ReferenceColumnExistenceError
@@ -135,6 +134,8 @@ class MyTransformer(Transformer):
                     return
                 
                 referenced_table_primary_key = referencedDB.get('primary_key'.encode())
+                referenced_table_primary_key_list = referenced_table_primary_key.decode().split('COLUMN')
+
                 referenced_column_is_non_primary = False
                 if referenced_table_primary_key is None:
                     referenced_column_is_non_primary = True
@@ -149,7 +150,7 @@ class MyTransformer(Transformer):
                     referencedDB.close()
                     return
                 
-                referencing_column_type = myDB.get(referencing_column_name.encode()).decode()
+                referencing_column_type = metaDB.get(referencing_column_name.encode()).decode()
                 referenced_column_type = referencedDB.get(referenced_column_name.encode()).decode()
                 if referencing_column_type != referenced_column_type:
                     print(f"{prompt_msg}Create table has failed: foreign key references wrong type") # ReferenceTypeError
@@ -169,7 +170,7 @@ class MyTransformer(Transformer):
             referencedDB.close()
             
         # If all foreign keys have no error
-        myDB.put('foreign_key'.encode(), 'FOREIGN'.join(foreign_keys).encode())
+        metaDB.put('foreign_key'.encode(), 'FOREIGN'.join(foreign_keys).encode())
         if foreign_keys:
             for referenced_table_schema_path in referenced_tables:
                 referencedDB = db.DB()
@@ -180,28 +181,29 @@ class MyTransformer(Transformer):
                 
         # Create table success
         print(f"{prompt_msg}\'{table_name}\' table is created")
-        myDB.close()
+        metaDB.close()
 
 
     def drop_table_query(self, items):
         table_name = items[2].children[0].lower()
+        table_path = 'DB/'+table_name+'.db'
         table_schema_path = 'DB/'+table_name+'_schema.db' 
 
         if not os.path.exists(table_schema_path):
             print(f"{prompt_msg}No such table") # NoSuchTable
             return
         
-        myDB = db.DB()
-        myDB.open(table_schema_path, dbtype=db.DB_HASH)
+        metaDB = db.DB()
+        metaDB.open(table_schema_path, dbtype=db.DB_HASH)
 
-        if myDB.get('reference_count'.encode()).decode() != '0':
+        if metaDB.get('reference_count'.encode()).decode() != '0':
             print(f"{prompt_msg}Drop table has failed: '{table_name}' is referenced by other table") # DropReferencedTableError
-            myDB.close()
+            metaDB.close()
             return
         
-        # If drop has no errors, delete metadata of referenced by this table in referenced table
-        if myDB.get('foreign_key'.encode()).decode():
-            foreign_keys = myDB.get('foreign_key'.encode()).decode().split('FOREIGN')
+        # If drop has no errors, decrease reference_count by 1 in referenced table
+        if metaDB.get('foreign_key'.encode()).decode():
+            foreign_keys = metaDB.get('foreign_key'.encode()).decode().split('FOREIGN')
             for foreign_key in foreign_keys:
                 referenced_table_name = foreign_key.split('REFERENCE')[1]
                 referenced_table_schema_path = 'DB/'+referenced_table_name+'_schema.db'
@@ -212,6 +214,8 @@ class MyTransformer(Transformer):
                 
         # Drop success
         os.remove(table_schema_path)
+        if os.path.exists(table_path):
+            os.remove(table_path)
         print(f"{prompt_msg}'{table_name}' table is dropped")
         
     
@@ -231,21 +235,21 @@ class MyTransformer(Transformer):
             print(f"{prompt_msg}No such table") # NoSuchTable
             return
         
-        myDB = db.DB()
-        myDB.open(table_schema_path, dbtype=db.DB_HASH)
+        metaDB = db.DB()
+        metaDB.open(table_schema_path, dbtype=db.DB_HASH)
 
         # Get table information
         columns, primary, foreign, not_null = [], [], [], []
 
-        column_names = myDB.get('column_names'.encode()).decode().split('COLUMN')
+        column_names = metaDB.get('column_names'.encode()).decode().split('COLUMN')
         for column_name in column_names:
-            columns.append((column_name, myDB.get(column_name.encode()).decode()))
-        primary = myDB.get('primary_key'.encode()).decode().split('COLUMN')
-        foreign_keys = myDB.get('foreign_key'.encode()).decode().split('FOREIGN')
+            columns.append((column_name, metaDB.get(column_name.encode()).decode()))
+        primary = metaDB.get('primary_key'.encode()).decode().split('COLUMN')
+        foreign_keys = metaDB.get('foreign_key'.encode()).decode().split('FOREIGN')
         for foreign_key in foreign_keys:
             foreign.extend(foreign_key.split('REFERENCE')[0].split('COLUMN'))
-        not_null = myDB.get('not_null'.encode()).decode().split('COLUMN')
-        myDB.close()
+        not_null = metaDB.get('not_null'.encode()).decode().split('COLUMN')
+        metaDB.close()
 
         # Print table information
         print("-----------------------------------------------------------------")
@@ -298,15 +302,14 @@ class MyTransformer(Transformer):
         else: # When select all
             table_path = 'DB/'+table_name+'.db'
             table_schema_path = 'DB/'+table_name+'_schema.db'
-            table_schema_path = 'DB/'+table_name+'_schema.db'
 
             if not os.path.exists(table_schema_path):
                 print(f"{prompt_msg}Selection has failed: '{table_name}' does not exist") # SelectTableExistenceError
                 return
             
-            myDB = db.DB()
-            myDB.open(table_schema_path, dbtype=db.DB_HASH)
-            column_names = myDB.get('column_names'.encode()).decode().split('COLUMN')
+            metaDB = db.DB()
+            metaDB.open(table_schema_path, dbtype=db.DB_HASH)
+            column_names = metaDB.get('column_names'.encode()).decode().split('COLUMN')
             line = '-'  * 20 * len(column_names)
             print(line)
             print(("{:<20} " * len(column_names)).format(*column_names))
@@ -315,20 +318,12 @@ class MyTransformer(Transformer):
             mainDB = db.DB()
             mainDB.open(table_path, dbtype=db.DB_HASH)
 
-            if has_primary_key(myDB):
-                cursor = mainDB.cursor()
-                while x := cursor.next():
-                    _, value = x
-                    column_values = value.decode().split('COLUMN')
-                    print(("{:<20} " * len(column_names)).format(*column_values))
-                print(line)
-            else:
-                cursor = mainDB.cursor()
-                while x := cursor.next():
-                    key, _ = x
-                    column_values = key.decode().split('COLUMN')
-                    print(("{:<20} " * len(column_names)).format(*column_values))
-                print(line)
+            cursor = mainDB.cursor()
+            while x := cursor.next():
+                key, _ = x
+                column_values = key.decode().split('COLUMN')
+                print(("{:<20} " * len(column_names)).format(*column_values))
+            print(line)
 
 
     def insert_query(self, items):
@@ -340,10 +335,19 @@ class MyTransformer(Transformer):
             print(f"{prompt_msg}No such table") # NoSuchTable
             return
         
-        myDB = db.DB()
-        myDB.open(table_schema_path, dbtype=db.DB_HASH)
+        metaDB = db.DB()
+        metaDB.open(table_schema_path, dbtype=db.DB_HASH)
         
-        column_names = myDB.get('column_names'.encode()).decode().split('COLUMN')
+        column_names = metaDB.get('column_names'.encode()).decode().split('COLUMN')
+
+        # Get inserted column names if insert has
+        has_column_names = False
+        insert_column_names = []
+        if items[3]:
+            has_column_names = True
+            insert_column_iter = items[3].find_data('column_name')
+            for insert_column in insert_column_iter:
+                insert_column_names.append(insert_column.children[0])
 
         # Get inserted types and values
         inserted_types, inserted_values = [], []
@@ -356,43 +360,321 @@ class MyTransformer(Transformer):
             inserted_types.append(type)
             inserted_values.append(value)
 
-        primary_key = myDB.get('primary_key'.encode()).decode()
+        # Get primary key and not null constraint
+        primary_key = metaDB.get('primary_key'.encode()).decode()
         if primary_key:
-            #TODO in project 1-3
             primary_key = primary_key.split('COLUMN')
-            return
-        else: # When table has no primary key
-            mainDB = db.DB()
-            mainDB.open(table_path, dbtype=db.DB_HASH, flags=db.DB_CREATE)
+        else:
+            primary_key = []
 
-            for i, (type, value, column_name) in enumerate(zip(inserted_types, inserted_values, column_names)):
-                #TODO in project 1-3
-                column_type = myDB.get(column_name.encode()).decode()
+        not_null = metaDB.get('not_null'.encode()).decode()
+        if not_null:
+            not_null = not_null.split('COLUMN')
+        else:
+            not_null = []
+
+        # Compare column numbers
+        mismatch = False
+        table_columns_len = len(column_names)
+        inserted_values_len = len(inserted_values)
+        if table_columns_len != inserted_values_len:
+            mismatch = True
+        if has_column_names:
+            insert_columns_len = len(insert_column_names)
+            if insert_columns_len != table_columns_len or insert_columns_len != inserted_values_len:
+                mismatch = True
+        if mismatch:
+            print(f"{prompt_msg}Insertion has failed: Types are not matched") # InsertTypeMismatchError
+            return
+
+        # Compare column types and existence and check not null constraint
+        if has_column_names:
+            for i, insert_column_name in enumerate(insert_column_names):
+
+                # Check column existence
+                if not metaDB.exists(insert_column_name.encode()):
+                    print(f"{prompt_msg}Insertion has failed: '{insert_column_name}' does not exist") # InsertColumnExistenceError
+                    return
+                
+                column_type = metaDB.get(insert_column_name.encode()).decode()
+                inserted_type = inserted_types[i]
+                
+                # Check not null constraint
+                if inserted_type == 'null' and (insert_column_name in primary_key or insert_column_name in not_null):
+                    print(f"{prompt_msg}Insertion has failed: '{insert_column_name}' is not nullable")
+                    return
+                
+                # Check column types
+                if 'char' in column_type:
+                    column_type = 'str'
+                if inserted_type != 'null' and column_type != inserted_type:
+                    print(f"{prompt_msg}Insertion has failed: Types are not matched") # InsertTypeMismatchError
+                    return
+        else: # When insert has no column names
+            for i, table_column_name in enumerate(column_names):
+                table_column_type = metaDB.get(table_column_name.encode()).decode()
+                inserted_type = inserted_types[i]
+
+                # Check not null constraint
+                if inserted_type == 'null' and (table_column_name in primary_key or table_column_name in not_null):
+                    print(f"{prompt_msg}Insertion has failed: '{table_column_name}' is not nullable") # InsertColumnNonNullableError
+                    return
+                
+                # Check column types
+                if 'char' in table_column_type:
+                    table_column_type = 'str'
+                if inserted_type != 'null' and table_column_type != inserted_type:
+                    print(inserted_type)
+                    print(f"{prompt_msg}Insertion has failed: Types are not matched") # InsertTypeMismatchError
+                    return
+
+        # When no error occured, insert values
+        mainDB = db.DB()
+        mainDB.open(table_path, dbtype=db.DB_HASH, flags=db.DB_CREATE)
+
+        if has_column_names:
+            for i, (value, insert_column_name) in enumerate(zip(inserted_values, insert_column_names)):
+                column_type = metaDB.get(insert_column_name.encode()).decode()
+                if 'char' in column_type:
+                    char_len = int(column_type[4:])
+                    inserted_values[i] = value[:char_len]
+            insert_values = []
+            for column_name in column_names:
+                i = insert_column_names.index(column_name)
+                insert_values.append(inserted_values[i])
+            mainDB.put('COLUMN'.join(insert_values).encode(), ''.encode())
+        else: # When insert has no column names
+            for i, (value, column_name) in enumerate(zip(inserted_values, column_names)):
+                column_type = metaDB.get(column_name.encode()).decode()
                 if 'char' in column_type:
                     char_len = int(column_type[4:])
                     inserted_values[i] = value[:char_len]
             mainDB.put('COLUMN'.join(inserted_values).encode(), ''.encode())
 
         # Insert success
-        myDB.close()
-        mainDB.close()
         print(f"{prompt_msg}The row is inserted")
+        metaDB.close()
+        mainDB.close()
+        return
 
 
     def delete_query(self, items):
-        print(f"{prompt_msg}\'DELETE\' requested")
+        table_name = items[2].children[0].lower()
+        table_path = 'DB/'+table_name+'.db' 
+        table_schema_path = 'DB/'+table_name+'_schema.db' 
 
+        if not os.path.exists(table_schema_path):
+            print(f"{prompt_msg}No such table") # NoSuchTable
+            return
+        
+        metaDB = db.DB()
+        metaDB.open(table_schema_path)
+        mainDB = db.DB()
+        mainDB.open(table_path)
+
+        delete_count = 0
+        # TODO: 주석 달기
+        if items[3]:
+            column_types, table_column_names = [], []
+            column_names = metaDB.get('column_names'.encode()).decode().split('COLUMN')
+            for column_name in column_names:
+                column_type = metaDB.get(column_name.encode()).decode()
+                column_types.append(column_type)
+                table_column_names.append((table_name, column_name))
+            cursor = mainDB.cursor()
+            while x := cursor.next():
+                key, _ = x
+                value = key.decode().split('COLUMN')
+                try:
+                    if evaluate_bool_expr(items[3].children[1], value, column_names, column_types, table_column_names):
+                        mainDB.delete(key)
+                        delete_count += 1
+                except:
+                    return
+        else: # When where clause not exists
+            cursor = mainDB.cursor()
+            while x := cursor.next():
+                key, _ = x
+                mainDB.delete(key)
+                delete_count += 1
+
+        # Delete Success        
+        print(f"{prompt_msg}{delete_count} row(s) are deleted")
+        metaDB.close()
+        mainDB.close()
+        return
 
     def update_tables_query(self, items):
         print(f"{prompt_msg}\'UPDATE\' requested")
 
 
-def has_primary_key(DB):
-    if DB.get('primary_key'.encode()):
-        return True
-    else:
-        return False
+def evaluate_bool_expr(tree, value, column_names, column_types, table_column_names):
+    booleans = []
+    for i, child in enumerate(tree.children):
+        # Odd children are 'or', so just add even children
+        if i % 2 == 0:
+            booleans.append(evaluate_bool_term(child, value, column_names, column_types, table_column_names))
+    return any(booleans)
 
+
+def evaluate_bool_term(tree, value, column_names, column_types, table_column_names):
+    booleans = []
+    for i, child in enumerate(tree.children):
+        # Odd children are 'and', so just add even children
+        if i % 2 == 0:
+            booleans.append(evaluate_bool_factor(child, value, column_names, column_types, table_column_names))
+    return all(booleans)
+
+
+def evaluate_bool_factor(tree, value, column_names, column_types, table_column_names,):
+    is_not = True if tree.children[0] else False
+    if tree.children[1].children[0].data == 'predicate':
+        if tree.children[1].children[0].children[0].data == 'comparison_predicate':
+            comp_operand_iter = tree.children[1].children[0].children[0].find_data('comp_operand')
+            comp_operand1 = next(comp_operand_iter)
+            comp_operand2 = next(comp_operand_iter)
+
+            if comp_operand1.children[0] != None and comp_operand1.children[0].data == 'comparable_value':
+                comp_operand1_value = comp_operand1.children[0].children[0]
+                comp_operand1_type = comp_operand1.children[0].children[0].type
+            else: # When operand is column
+                column1 = comp_operand1.children[1].children[0]
+                if comp_operand1.children[0]:
+                    table1 = comp_operand1.children[0].children[0]
+                else:
+                    table1 = ''
+                if table1:
+                    if column1 not in column_names:
+                        print(f"{prompt_msg}Where clause trying to reference non existing column") # WhereColumnNotExist
+                        raise
+                    elif (table1, column1) not in table_column_names:
+                        print(f"{prompt_msg}Where clause trying to reference tables which are not specified") # WhereTableNotSpecified
+                        raise
+                    else:
+                        idx = table_column_names.index((table1, column1))
+                        comp_operand1_value = value[idx]
+                        comp_operand1_type = column_types[idx].lower()
+                else:
+                    if column1 not in column_names:
+                        print(f"{prompt_msg}Where clause trying to reference non existing column") # WhereColumnNotExist
+                        raise
+                    elif column_names.count(column1) > 1:
+                        print(f"{prompt_msg}Where clause contains ambiguous reference") # WhereAmbiguousReference
+                        raise
+                    else:
+                        idx = column_names.index(column1)
+                        comp_operand1_value = value[idx]
+                        comp_operand1_type = column_types[idx].lower()
+
+            if comp_operand2.children[0] != None and comp_operand2.children[0].data == 'comparable_value':
+                comp_operand2_value = comp_operand2.children[0].children[0]
+                comp_operand2_type = comp_operand2.children[0].children[0].type.lower()
+            else: # When operand is column
+                column2 = comp_operand2.children[1].children[0]
+                if comp_operand2.children[0]:
+                    table2 = comp_operand2.children[0].children[0]
+                else:
+                    table2 = ''
+                if table2:
+                    if column2 not in column_names:
+                        print(f"{prompt_msg}Where clause trying to reference non existing column") # WhereColumnNotExist
+                        raise
+                    elif (table2, column2) not in table_column_names:
+                        print(f"{prompt_msg}Where clause trying to reference tables which are not specified") # WhereTableNotSpecified
+                        raise
+                    else:
+                        idx = table_column_names.index((table2, column2))
+                        comp_operand2_value = value[idx]
+                        comp_operand2_type = column_types[idx].lower()
+                else:
+                    if column2 not in column_names:
+                        print(f"{prompt_msg}Where clause trying to reference non existing column") # WhereColumnNotExist
+                        raise
+                    elif column_names.count(column2) > 1:
+                        print(f"{prompt_msg}Where clause contains ambiguous reference") # WhereAmbiguousReference
+                        raise
+                    else:
+                        idx = column_names.index(column2)
+                        comp_operand2_value = value[idx]
+                        comp_operand2_type = column_types[idx].lower()
+
+            type_error = False
+            if comp_operand1_type == comp_operand2_type:
+                pass
+            elif 'char' in comp_operand1_type and 'char' in comp_operand2_type:
+                pass
+            elif 'char' in comp_operand1_type and comp_operand2_type == 'str':
+                pass
+            elif comp_operand1_type == 'str' and 'char' in comp_operand2_type:
+                pass
+            else:
+                type_error = True;
+            
+            if type_error:
+                print(f"{prompt_msg}Where clause trying to compare incomparable values") # WhereIncomparableError
+                raise
+
+            comp_op_iter = tree.children[1].children[0].children[0].find_data('comp_op')
+            comp_op = next(comp_op_iter).children[0]
+
+            if comp_op == '>':
+                result = True if comp_operand1_value > comp_operand2_value else False
+            elif comp_op == '<':
+                result = True if comp_operand1_value < comp_operand2_value else False
+            elif comp_op == '=':
+                result = True if comp_operand1_value == comp_operand2_value else False
+            elif comp_op == '!=':
+                result = True if comp_operand1_value != comp_operand2_value else False
+            elif comp_op == '>=':
+                result = True if comp_operand1_value >= comp_operand2_value else False
+            elif comp_op == '<=':
+                result = True if comp_operand1_value <= comp_operand2_value else False
+
+            if is_not:
+                return not result
+            else:
+                return result
+            
+        else: # When predicate is null_predicate
+            column = tree.children[1].children[0].children[0].children[1].children[0]
+            if tree.children[1].children[0].children[0].children[0]:
+                table = tree.children[1].children[0].children[0].children[0].children[0]
+            else:
+                table = ''
+            if table:
+                if column not in column_names:
+                    print(f"{prompt_msg}Where clause trying to reference non existing column") # WhereColumnNotExist
+                    raise
+                elif (table, column) not in table_column_names:
+                    print(f"{prompt_msg}Where clause trying to reference tables which are not specified") # WhereTableNotSpecified
+                    raise
+                else:
+                    idx = table_column_names.index((table, column))
+                    column_value = value[idx].lower()
+            else:
+                if column not in column_names:
+                    print(f"{prompt_msg}Where clause trying to reference non existing column") # WhereColumnNotExist
+                    raise
+                elif column_names.count(column) > 1:
+                    print(f"{prompt_msg}Where clause contains ambiguous reference") # WhereAmbiguousReference
+                    raise
+                else:
+                    idx = column_names.index(column)
+                    column_value = value[idx].lower()
+
+            is_not_null = tree.children[1].children[0].children[0].children[2].children[1]
+            if is_not_null:
+                return not column_value == 'null'
+            else: # is null
+                return column_value == 'null'
+            
+    else: # When parenthesized_boolean_expr
+        if is_not:
+            return not evaluate_bool_expr(tree.children[1].children[0].children[1])
+        else:
+            return evaluate_bool_expr(tree.children[1].children[0].children[1])
+
+    
 
 # run.py starts from this location
 with open('grammar.lark') as file:

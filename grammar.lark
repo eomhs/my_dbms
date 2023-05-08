@@ -40,7 +40,6 @@ AS : "as"i
 IS : "is"i
 OR : "or"i
 AND : "and"i
-comp_op : "<" | ">" | "=" | ">=" | "<=" | "!="
 INSERT : "insert"i
 INTO : "into"i
 VALUES : "values"i
@@ -49,6 +48,12 @@ EXPLAIN : "explain"i
 DESCRIBE : "describe"i
 UPDATE : "update"i
 SET : "set"i
+LESSTHAN : "<"
+LESSEQUAL : "<="
+GREATERTHAN: ">"
+GREATEREQUAL : ">="
+EQUAL: "="
+NOTEQUAL: "!="
 
 
 // QUERY
@@ -112,6 +117,7 @@ parenthesized_boolean_expr : LP boolean_expr RP
 predicate : comparison_predicate
           | null_predicate
 comparison_predicate : comp_operand comp_op comp_operand
+comp_op : LESSTHAN | LESSEQUAL | EQUAL | GREATERTHAN | GREATEREQUAL | NOTEQUAL
 comp_operand : comparable_value
              | [table_name "."] column_name
 comparable_value : INT | STR | DATE
