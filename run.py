@@ -284,48 +284,163 @@ class MyTransformer(Transformer):
  
     def select_query(self, items):
         referred_table_iter = items[2].find_data('referred_table')
-        # TODO
+        column_names, column_types, table_column_names = [], [], []
+
+        # Get referred table names
         table_names = []
         for referred_table in referred_table_iter:
             table_name = referred_table.children[0].children[0].lower()
             table_names.append(table_name)
 
-        selected_column_iter = items[1].find_data('selected_column')
-        selected_columns = []
-        for selected_column in selected_column_iter:
-            column_name = selected_column.children[1].children[0].lower()
-            selected_columns.append(column_name)
-        
-        #TODO
-        if selected_columns:
-            pass
-        else: # When select all
-            table_path = 'DB/'+table_name+'.db'
-            table_schema_path = 'DB/'+table_name+'_schema.db'
-
+        for table_name in table_names:
+            table_schema_path = 'DB/'+table_name+'_schema.db' 
             if not os.path.exists(table_schema_path):
-                print(f"{prompt_msg}Selection has failed: '{table_name}' does not exist") # SelectTableExistenceError
+                print(f"{prompt_msg}Selection has failed: {table_name} does not exist") # SelectTableExistenceError
                 return
-            
-            metaDB = db.DB()
-            metaDB.open(table_schema_path, dbtype=db.DB_HASH)
-            column_names = metaDB.get('column_names'.encode()).decode().split('COLUMN')
+            else:
+                metaDB = db.DB()
+                metaDB.open(table_schema_path)
+                column_names_tmp = metaDB.get('column_names'.encode()).decode().split('COLUMN')
+                for column_name in column_names_tmp:
+                    column_names.append(column_name)
+                    column_type = metaDB.get(column_name.encode()).decode()
+                    column_types.append(column_type)
+                    table_column_names.append((table_name, column_name))
+                metaDB.close()
+
+        # Get selected columns and selected indices
+        selected_column_iter = items[1].find_data('selected_column')
+        selected_columns, selected_indices = [], []
+        for selected_column in selected_column_iter:
+            table_name = selected_column.children[0]
+            if table_name:
+                table = table_name.children[0]
+            else:
+                table = ''
+            column_name = selected_column.children[1].children[0].lower()
+            if table and table not in table_names:
+                print(f"{prompt_msg}Selection has failed: {table} does not exist") # SelectTableExistenceError
+                return
+            if column_name not in column_names or (not table and column_names.count(column_name) > 1):
+                print(f"{prompt_msg}Selection has failed: fail to resolve {column_name}") # SelectColumnResolveError
+                return
+            if table:
+                selected_columns.append((table + '.' + column_name))
+                selected_indices.append(table_column_names.index((table, column_name)))
+            else:
+                selected_columns.append(column_name)
+                selected_indices.append(column_names.index(column_name))
+        
+        # Make temporary cartesian table DB
+        tmpDB = db.DB()
+        tmp_path = 'DB/tmp.db'
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        tmpDB.open(tmp_path, dbtype=db.DB_HASH, flags=db.DB_CREATE)
+
+        for i, table_name in enumerate(table_names):
+            cartesian_values = []
+            tableDB = db.DB()
+            table_path = 'DB/'+table_name+'.db'
+            tableDB.open(table_path, dbtype=db.DB_HASH)
+            cursor_tmp = tmpDB.cursor()
+
+            while x := cursor_tmp.next():
+                key_tmp, _ = x
+                cursor_table = tableDB.cursor()
+                while y := cursor_table.next():
+                    key_table, _ = y
+                    tmp_values = key_tmp.decode().split('COLUMN')
+                    table_values = key_table.decode().split('COLUMN')
+                    tmp_values.extend(table_values)
+                    cartesian_values.append(tmp_values)
+                tmpDB.delete(key_tmp)
+
+            for cartesian_value in cartesian_values:
+                tmpDB.put('COLUMN'.join(cartesian_value).encode(), ''.encode())
+
+            # When first table, just copy it to tmp
+            if i == 0:
+                cursor_table = tableDB.cursor()
+                while x := cursor_table.next():
+                    key_table, _ = x
+                    tmpDB.put(key_table, ''.encode())
+
+            tableDB.close()
+
+        if selected_columns:
+            line = '-'  * 20 * len(selected_columns)
+            first_time = True
+            cursor_tmp = tmpDB.cursor()
+            while x := cursor_tmp.next():
+                key_tmp, _ = x
+                value = key_tmp.decode().split('COLUMN')
+                selected_value = []
+                for idx in selected_indices:
+                    selected_value.append(value[idx])
+
+                # When where clause exists
+                if items[2].children[1]:
+                    try:
+                        if evaluate_bool_expr(items[2].children[1].children[1], value, column_names, column_types, table_column_names):
+                            if first_time:
+                                print(line)
+                                print(("{:<20} " * len(selected_columns)).format(*selected_columns))
+                                print(line)
+                                first_time = False
+                            print(("{:<20} " * len(selected_value)).format(*selected_value))
+                        else:
+                            continue
+                    except:
+                        return
+                # When where clause not exists
+                else: 
+                    if first_time:
+                        print(line)
+                        print(("{:<20} " * len(selected_columns)).format(*selected_columns))
+                        print(line)
+                        first_time = False
+                    print(("{:<20} " * len(selected_value)).format(*selected_value))
+
+            print(line)
+        else: # When select all
             line = '-'  * 20 * len(column_names)
+            first_time = True
+            cursor_tmp = tmpDB.cursor()
+            while x := cursor_tmp.next():
+                key_tmp, _ = x
+                value = key_tmp.decode().split('COLUMN')
+
+                # When where clause exists
+                if items[2].children[1]:
+                    try:
+                        if evaluate_bool_expr(items[2].children[1].children[1], value, column_names, column_types, table_column_names):
+                            if first_time:
+                                print(line)
+                                print(("{:<20} " * len(column_names)).format(*column_names))
+                                print(line)
+                                first_time = False
+                            print(("{:<20} " * len(value)).format(*value))
+                        else:
+                            continue
+                    except:
+                        return
+                # When where clause not exists
+                else: 
+                    if first_time:
+                        print(line)
+                        print(("{:<20} " * len(column_names)).format(*column_names))
+                        print(line)
+                        first_time = False
+                    print(("{:<20} " * len(value)).format(*value))
+
             print(line)
-            print(("{:<20} " * len(column_names)).format(*column_names))
-            print(line)
 
-            mainDB = db.DB()
-            mainDB.open(table_path, dbtype=db.DB_HASH)
+        # Select Success
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
-            cursor = mainDB.cursor()
-            while x := cursor.next():
-                key, _ = x
-                column_values = key.decode().split('COLUMN')
-                print(("{:<20} " * len(column_names)).format(*column_values))
-            print(line)
-
-
+        
     def insert_query(self, items):
         table_name = items[2].children[0].lower()
         table_path = 'DB/'+table_name+'.db' 
@@ -468,12 +583,12 @@ class MyTransformer(Transformer):
             return
         
         metaDB = db.DB()
-        metaDB.open(table_schema_path)
+        metaDB.open(table_schema_path, dbtype=db.DB_HASH)
         mainDB = db.DB()
-        mainDB.open(table_path)
+        mainDB.open(table_path, dbtype=db.DB_HASH)
 
         delete_count = 0
-        # TODO: 주석 달기
+        # When where clause exists
         if items[3]:
             column_types, table_column_names = [], []
             column_names = metaDB.get('column_names'.encode()).decode().split('COLUMN')
@@ -485,7 +600,9 @@ class MyTransformer(Transformer):
             while x := cursor.next():
                 key, _ = x
                 value = key.decode().split('COLUMN')
-                try:
+
+                # Evaluate and delete record if result is true
+                try: 
                     if evaluate_bool_expr(items[3].children[1], value, column_names, column_types, table_column_names):
                         mainDB.delete(key)
                         delete_count += 1
@@ -675,7 +792,6 @@ def evaluate_bool_factor(tree, value, column_names, column_types, table_column_n
             return evaluate_bool_expr(tree.children[1].children[0].children[1])
 
     
-
 # run.py starts from this location
 with open('grammar.lark') as file:
     sql_parser = Lark(file.read(), start="command", lexer="basic")
